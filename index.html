@@ -37,6 +37,19 @@
             margin-bottom: 1rem;
             border-radius: 8px;
             box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            position: relative;
+        }
+        
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(255, 255, 255, 0.8);
+            padding: 1rem;
+            border-radius: 8px;
+            text-align: center;
+            z-index: 1000;
         }
         
         .controls {
@@ -60,6 +73,11 @@
         
         button:hover {
             background-color: #2980b9;
+        }
+        
+        button:disabled {
+            background-color: #95a5a6;
+            cursor: not-allowed;
         }
         
         #status {
@@ -96,7 +114,9 @@
     </div>
     
     <div class="main-content">
-        <div id="map"></div>
+        <div id="map">
+            <div id="loading">Loading map...</div>
+        </div>
         
         <div class="controls">
             <button id="selectLocation">Select Current Location</button>
@@ -120,23 +140,58 @@
         let radiusCircle;
         let watchId;
         let selectedLocation = null;
+        let mapLoaded = false;
         
         // Initialize the map
         function initMap() {
+            // Show loading indicator
+            document.getElementById('loading').style.display = 'block';
+            
             // Create a map with default view
-            map = L.map('map').setView([0, 0], 2);
+            map = L.map('map', {
+                zoomControl: true,
+                attributionControl: true
+            }).setView([0, 0], 2);
             
             // Add OpenStreetMap tile layer
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            const tileLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
             }).addTo(map);
+            
+            // Hide loading indicator when map and tiles are loaded
+            tileLayer.on('load', function() {
+                if (!mapLoaded) {
+                    document.getElementById('loading').style.display = 'none';
+                    mapLoaded = true;
+                    
+                    // Get user's initial location after map is loaded
+                    getUserInitialLocation();
+                }
+            });
             
             // Set up event listeners
             document.getElementById('selectLocation').addEventListener('click', selectCurrentLocation);
             document.getElementById('startTracking').addEventListener('click', toggleLiveTracking);
             
-            // Try to get user's initial location
+            // Force hide loading after 5 seconds, in case the load event doesn't fire
+            setTimeout(function() {
+                if (!mapLoaded) {
+                    document.getElementById('loading').style.display = 'none';
+                    mapLoaded = true;
+                    
+                    // Get user's initial location after timeout
+                    getUserInitialLocation();
+                }
+            }, 5000);
+        }
+        
+        // Get user's initial location
+        function getUserInitialLocation() {
             if (navigator.geolocation) {
+                const selectLocationBtn = document.getElementById('selectLocation');
+                selectLocationBtn.disabled = true;
+                selectLocationBtn.textContent = 'Getting location...';
+                
                 navigator.geolocation.getCurrentPosition(
                     (position) => {
                         const initialLocation = {
@@ -158,9 +213,21 @@
                         }).addTo(map);
                         
                         userMarker.bindPopup('Your Current Location').openPopup();
+                        
+                        // Re-enable select location button
+                        selectLocationBtn.disabled = false;
+                        selectLocationBtn.textContent = 'Select Current Location';
                     },
                     (error) => {
                         console.error('Error getting user location:', error);
+                        // Re-enable select location button
+                        selectLocationBtn.disabled = false;
+                        selectLocationBtn.textContent = 'Select Current Location';
+                    },
+                    {
+                        enableHighAccuracy: true,
+                        timeout: 10000,
+                        maximumAge: 0
                     }
                 );
             } else {
@@ -171,6 +238,10 @@
         // Select the current location as the target location
         function selectCurrentLocation() {
             if (navigator.geolocation) {
+                const selectLocationBtn = document.getElementById('selectLocation');
+                selectLocationBtn.disabled = true;
+                selectLocationBtn.textContent = 'Getting location...';
+                
                 navigator.geolocation.getCurrentPosition(
                     (position) => {
                         selectedLocation = {
@@ -214,10 +285,22 @@
                         
                         // Show the status element
                         document.getElementById('status').style.display = 'block';
+                        
+                        // Re-enable select location button
+                        selectLocationBtn.disabled = false;
+                        selectLocationBtn.textContent = 'Select Current Location';
                     },
                     (error) => {
                         console.error('Error getting user location:', error);
                         alert('Unable to get your current location. Please check your device settings and try again.');
+                        // Re-enable select location button
+                        selectLocationBtn.disabled = false;
+                        selectLocationBtn.textContent = 'Select Current Location';
+                    },
+                    {
+                        enableHighAccuracy: true,
+                        timeout: 10000,
+                        maximumAge: 0
                     }
                 );
             } else {
@@ -228,12 +311,23 @@
         // Toggle live tracking
         function toggleLiveTracking() {
             const trackingButton = document.getElementById('startTracking');
+            const statusElement = document.getElementById('status');
             
             if (watchId) {
                 // Stop tracking
                 navigator.geolocation.clearWatch(watchId);
                 watchId = null;
                 trackingButton.textContent = 'Start Live Tracking';
+                
+                // Hide status when tracking is stopped
+                statusElement.style.display = 'none';
+                
+                // Reset user marker color
+                if (userMarker) {
+                    userMarker.setStyle({
+                        fillColor: '#4285F4' // Default blue
+                    });
+                }
             } else {
                 // Start tracking
                 if (navigator.geolocation) {
@@ -242,6 +336,7 @@
                         (error) => {
                             console.error('Error tracking user location:', error);
                             alert('Unable to track your location. Please check your device settings and try again.');
+                            trackingButton.textContent = 'Start Live Tracking';
                         },
                         {
                             enableHighAccuracy: true,
@@ -251,6 +346,11 @@
                     );
                     
                     trackingButton.textContent = 'Stop Live Tracking';
+                    
+                    // If we have a selected location, show status
+                    if (selectedLocation) {
+                        statusElement.style.display = 'block';
+                    }
                 } else {
                     alert('Geolocation is not supported by your browser.');
                 }
@@ -289,6 +389,8 @@
         
         // Update the user's status (inside or outside the circle)
         function updateUserStatus() {
+            if (!userMarker || !selectedLocation) return;
+            
             const userLatLng = userMarker.getLatLng();
             const selectedLatLng = L.latLng(selectedLocation.lat, selectedLocation.lng);
             
@@ -297,23 +399,26 @@
             
             const statusElement = document.getElementById('status');
             
-            // Check if the user is within the circle
-            if (distance <= 50) { // 50 meters
-                statusElement.textContent = 'You are INSIDE the target area!';
-                statusElement.className = 'inside';
-                
-                // Update user marker color to green
-                userMarker.setStyle({
-                    fillColor: '#2ecc71' // Green
-                });
-            } else {
-                statusElement.textContent = 'ALERT: You are OUTSIDE the target area!';
-                statusElement.className = 'outside';
-                
-                // Update user marker color to red
-                userMarker.setStyle({
-                    fillColor: '#e74c3c' // Red
-                });
+            // Only update status if tracking is active
+            if (watchId) {
+                // Check if the user is within the circle
+                if (distance <= 50) { // 50 meters
+                    statusElement.textContent = 'You are INSIDE the target area!';
+                    statusElement.className = 'inside';
+                    
+                    // Update user marker color to green
+                    userMarker.setStyle({
+                        fillColor: '#2ecc71' // Green
+                    });
+                } else {
+                    statusElement.textContent = 'ALERT: You are OUTSIDE the target area!';
+                    statusElement.className = 'outside';
+                    
+                    // Update user marker color to red
+                    userMarker.setStyle({
+                        fillColor: '#e74c3c' // Red
+                    });
+                }
             }
         }
         
