@@ -80,6 +80,14 @@
             cursor: not-allowed;
         }
         
+        #trackingButton.tracking {
+            background-color: #e74c3c;
+        }
+        
+        #trackingButton.tracking:hover {
+            background-color: #c0392b;
+        }
+        
         #status {
             padding: 1rem;
             border-radius: 4px;
@@ -150,6 +158,17 @@
             transform: translate(-50%, -50%);
             transform-origin: center;
         }
+        
+        #errorMessage {
+            background-color: #f8d7da;
+            color: #721c24;
+            padding: 1rem;
+            border-radius: 4px;
+            margin-top: 1rem;
+            text-align: center;
+            font-weight: bold;
+            display: none;
+        }
     </style>
 </head>
 <body>
@@ -170,7 +189,8 @@
         
         <div class="controls">
             <button id="selectLocation">Select Current Location</button>
-            <button id="startTracking">Start Live Tracking</button>
+            <button id="trackingButton">Start Live Tracking</button>
+            <div id="errorMessage"></div>
             <div id="status"></div>
             <div id="trackingInfo" class="tracking-info" style="display: none;">
                 <span id="headingDisplay">Heading: 0°</span> | 
@@ -232,7 +252,7 @@
             
             // Set up event listeners
             document.getElementById('selectLocation').addEventListener('click', selectCurrentLocation);
-            document.getElementById('startTracking').addEventListener('click', startLiveTracking);
+            document.getElementById('trackingButton').addEventListener('click', toggleTracking);
             
             // Create custom direction icon for user marker
             customIcon = L.divIcon({
@@ -297,10 +317,14 @@
                         // Re-enable select location button
                         selectLocationBtn.disabled = false;
                         selectLocationBtn.textContent = 'Select Current Location';
+                        
+                        // Hide any error message
+                        document.getElementById('errorMessage').style.display = 'none';
                     },
                     (error) => {
                         console.error('Error getting user location:', error);
-                        alert('Unable to get your location. Please check your device settings and try again.');
+                        showErrorMessage('Unable to get your location. Please check your device settings and try again.');
+                        
                         // Re-enable select location button
                         selectLocationBtn.disabled = false;
                         selectLocationBtn.textContent = 'Select Current Location';
@@ -312,8 +336,42 @@
                     }
                 );
             } else {
-                alert('Geolocation is not supported by your browser.');
+                showErrorMessage('Geolocation is not supported by your browser.');
             }
+        }
+        
+        // Toggle tracking state
+        function toggleTracking() {
+            const trackingButton = document.getElementById('trackingButton');
+            const trackingInfoElement = document.getElementById('trackingInfo');
+            
+            if (trackingActive) {
+                // Stop tracking
+                if (watchId) {
+                    navigator.geolocation.clearWatch(watchId);
+                    watchId = null;
+                }
+                
+                trackingActive = false;
+                trackingButton.textContent = 'Start Live Tracking';
+                trackingButton.classList.remove('tracking');
+                trackingInfoElement.style.display = 'none';
+                
+                // Hide error message if any
+                document.getElementById('errorMessage').style.display = 'none';
+            } else {
+                // Start tracking
+                startLiveTracking();
+                trackingButton.textContent = 'Stop Tracking';
+                trackingButton.classList.add('tracking');
+            }
+        }
+        
+        // Show error message
+        function showErrorMessage(message) {
+            const errorElement = document.getElementById('errorMessage');
+            errorElement.textContent = message;
+            errorElement.style.display = 'block';
         }
         
         // Initialize device orientation tracking
@@ -341,12 +399,27 @@
         
         // Handle device orientation changes
         function handleOrientation(event) {
+            // Fix for compass direction issue
             if (event.webkitCompassHeading) {
-                // iOS compass heading (in degrees)
+                // iOS compass heading (already in degrees)
                 currentHeading = event.webkitCompassHeading;
-            } else if (event.alpha) {
-                // Android/others (alpha is in degrees)
-                currentHeading = 360 - event.alpha;
+            } else if (event.alpha !== null) {
+                // Android/others - convert to compass heading
+                // Alpha is Z-axis rotation in degrees (0-360)
+                currentHeading = (360 - event.alpha) % 360;
+                
+                // Apply device orientation corrections if needed
+                if (event.beta !== null && event.gamma !== null) {
+                    // Adjust heading based on device orientation
+                    if (Math.abs(event.beta) > 45) {
+                        // Device is significantly tilted forwards or backwards
+                        if (event.gamma < 0) {
+                            currentHeading = (currentHeading + 90) % 360;
+                        } else {
+                            currentHeading = (currentHeading + 270) % 360;
+                        }
+                    }
+                }
             }
             
             // Update tracking info if active
@@ -357,7 +430,7 @@
                 if (directionMarker) {
                     const arrow = document.getElementById('directionArrow');
                     if (arrow) {
-                        arrow.style.transform = `rotate(${currentHeading}deg)`;
+                        arrow.style.transform = `translate(-50%, -50%) rotate(${currentHeading}deg)`;
                     }
                 }
             }
@@ -417,10 +490,14 @@
                         // Re-enable select location button
                         selectLocationBtn.disabled = false;
                         selectLocationBtn.textContent = 'Select Current Location';
+                        
+                        // Hide any error message
+                        document.getElementById('errorMessage').style.display = 'none';
                     },
                     (error) => {
                         console.error('Error getting user location:', error);
-                        alert('Unable to get your current location. Please check your device settings and try again.');
+                        showErrorMessage('Unable to get your current location. Please check your device settings and try again.');
+                        
                         // Re-enable select location button
                         selectLocationBtn.disabled = false;
                         selectLocationBtn.textContent = 'Select Current Location';
@@ -432,11 +509,11 @@
                     }
                 );
             } else {
-                alert('Geolocation is not supported by your browser.');
+                showErrorMessage('Geolocation is not supported by your browser.');
             }
         }
         
-        // Start live tracking - no toggle functionality
+        // Start live tracking
         function startLiveTracking() {
             const trackingInfoElement = document.getElementById('trackingInfo');
             
@@ -448,32 +525,51 @@
             
             // Start fresh tracking session
             if (navigator.geolocation) {
-                // Set tracking as active
-                trackingActive = true;
-                
-                // Start position watching with higher frequency updates
-                watchId = navigator.geolocation.watchPosition(
-                    updateUserPosition,
-                    (error) => {
-                        console.error('Error tracking user location:', error);
-                        alert('Unable to track your location. Please check your device settings and try again.');
-                    },
-                    {
-                        enableHighAccuracy: true,
-                        maximumAge: 0,
-                        timeout: 1000 // Reduced timeout for more frequent updates
+                try {
+                    // Set tracking as active
+                    trackingActive = true;
+                    
+                    // Start position watching with higher frequency updates
+                    watchId = navigator.geolocation.watchPosition(
+                        updateUserPosition,
+                        (error) => {
+                            console.error('Error tracking user location:', error);
+                            showErrorMessage('Unable to track your location. Please check your device settings and try again.');
+                            
+                            // Reset tracking state
+                            trackingActive = false;
+                            document.getElementById('trackingButton').textContent = 'Start Live Tracking';
+                            document.getElementById('trackingButton').classList.remove('tracking');
+                            trackingInfoElement.style.display = 'none';
+                        },
+                        {
+                            enableHighAccuracy: true,
+                            maximumAge: 0,
+                            timeout: 5000 // Increased timeout for more reliable tracking
+                        }
+                    );
+                    
+                    // Show tracking info
+                    trackingInfoElement.style.display = 'block';
+                    
+                    // If we have a selected location, ensure status is visible
+                    if (selectedLocation) {
+                        document.getElementById('status').style.display = 'block';
                     }
-                );
-                
-                // Show tracking info
-                trackingInfoElement.style.display = 'block';
-                
-                // If we have a selected location, ensure status is visible
-                if (selectedLocation) {
-                    document.getElementById('status').style.display = 'block';
+                    
+                    // Hide any error message
+                    document.getElementById('errorMessage').style.display = 'none';
+                } catch (e) {
+                    console.error('Exception during tracking:', e);
+                    showErrorMessage('Failed to start tracking: ' + e.message);
+                    
+                    // Reset tracking state
+                    trackingActive = false;
+                    document.getElementById('trackingButton').textContent = 'Start Live Tracking';
+                    document.getElementById('trackingButton').classList.remove('tracking');
                 }
             } else {
-                alert('Geolocation is not supported by your browser.');
+                showErrorMessage('Geolocation is not supported by your browser.');
             }
         }
         
@@ -572,10 +668,13 @@
                 // Calculate speed from positions if device doesn't provide it
                 const distance = calculateDistance(lastPosition, userLocation);
                 const timeDiff = (new Date() - lastPosition.timestamp) / 1000; // in seconds
-                const speed = (distance / timeDiff) * 3.6; // Convert m/s to km/h
                 
-                if (!isNaN(speed) && isFinite(speed) && speed < 150) { // Sanity check on speed
-                    document.getElementById('speedDisplay').textContent = `Speed: ${speed.toFixed(1)} km/h`;
+                if (timeDiff > 0) {
+                    const speed = (distance / timeDiff) * 3.6; // Convert m/s to km/h
+                    
+                    if (!isNaN(speed) && isFinite(speed) && speed < 150) { // Sanity check on speed
+                        document.getElementById('speedDisplay').textContent = `Speed: ${speed.toFixed(1)} km/h`;
+                    }
                 }
             }
             
@@ -585,14 +684,16 @@
                 
                 if (distance > movementThreshold) {
                     // Calculate heading based on movement if no device orientation
-                    if (!currentHeading || currentHeading === 0) {
-                        currentHeading = calculateHeading(lastPosition, userLocation);
+                    const calculatedHeading = calculateHeading(lastPosition, userLocation);
+                    
+                    if (currentHeading === 0 || currentHeading === null) {
+                        currentHeading = calculatedHeading;
                     }
                     
                     // Update direction arrow
                     const arrow = document.getElementById('directionArrow');
                     if (arrow) {
-                        arrow.style.transform = `rotate(${currentHeading}deg)`;
+                        arrow.style.transform = `translate(-50%, -50%) rotate(${currentHeading}deg)`;
                     }
                     
                     // Update heading display
