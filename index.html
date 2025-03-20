@@ -106,6 +106,39 @@
             background-color: #e74c3c;
             color: white;
         }
+        
+        .direction-indicator {
+            position: absolute;
+            top: 70px;
+            right: 10px;
+            width: 40px;
+            height: 40px;
+            background-color: rgba(255, 255, 255, 0.8);
+            border-radius: 50%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+        }
+        
+        .compass-arrow {
+            width: 0;
+            height: 0;
+            border-left: 8px solid transparent;
+            border-right: 8px solid transparent;
+            border-bottom: 16px solid #e74c3c;
+            transform-origin: center bottom;
+        }
+        
+        .tracking-info {
+            padding: 0.5rem;
+            background-color: rgba(255, 255, 255, 0.8);
+            border-radius: 4px;
+            margin-top: 0.5rem;
+            font-size: 0.9rem;
+            text-align: center;
+        }
     </style>
 </head>
 <body>
@@ -116,12 +149,19 @@
     <div class="main-content">
         <div id="map">
             <div id="loading">Loading map...</div>
+            <div class="direction-indicator" id="directionIndicator">
+                <div class="compass-arrow" id="compassArrow"></div>
+            </div>
         </div>
         
         <div class="controls">
             <button id="selectLocation">Select Current Location</button>
             <button id="startTracking">Start Live Tracking</button>
             <div id="status"></div>
+            <div id="trackingInfo" class="tracking-info" style="display: none;">
+                <span id="headingDisplay">Heading: 0°</span> | 
+                <span id="speedDisplay">Speed: 0 km/h</span>
+            </div>
         </div>
     </div>
     
@@ -141,6 +181,12 @@
         let watchId;
         let selectedLocation = null;
         let mapLoaded = false;
+        let lastPosition = null;
+        let currentHeading = 0;
+        let isRotating = false;
+        let directionArrow;
+        let previousPositions = [];
+        let movementThreshold = 5; // meters
         
         // Initialize the map
         function initMap() {
@@ -173,6 +219,9 @@
             document.getElementById('selectLocation').addEventListener('click', selectCurrentLocation);
             document.getElementById('startTracking').addEventListener('click', toggleLiveTracking);
             
+            // Initialize direction indicator
+            directionArrow = document.getElementById('compassArrow');
+            
             // Force hide loading after 5 seconds, in case the load event doesn't fire
             setTimeout(function() {
                 if (!mapLoaded) {
@@ -199,6 +248,9 @@
                             lng: position.coords.longitude
                         };
                         
+                        // Store the initial position
+                        lastPosition = initialLocation;
+                        
                         // Center the map on the user's location
                         map.setView([initialLocation.lat, initialLocation.lng], 15);
                         
@@ -214,12 +266,16 @@
                         
                         userMarker.bindPopup('Your Current Location').openPopup();
                         
+                        // Try to get device orientation
+                        initDeviceOrientation();
+                        
                         // Re-enable select location button
                         selectLocationBtn.disabled = false;
                         selectLocationBtn.textContent = 'Select Current Location';
                     },
                     (error) => {
                         console.error('Error getting user location:', error);
+                        alert('Unable to get your location. Please check your device settings and try again.');
                         // Re-enable select location button
                         selectLocationBtn.disabled = false;
                         selectLocationBtn.textContent = 'Select Current Location';
@@ -232,6 +288,51 @@
                 );
             } else {
                 alert('Geolocation is not supported by your browser.');
+            }
+        }
+        
+        // Initialize device orientation tracking
+        function initDeviceOrientation() {
+            if (window.DeviceOrientationEvent) {
+                // Request permission for iOS 13+ devices
+                if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+                    document.getElementById('map').addEventListener('click', function() {
+                        DeviceOrientationEvent.requestPermission()
+                            .then(permissionState => {
+                                if (permissionState === 'granted') {
+                                    window.addEventListener('deviceorientation', handleOrientation);
+                                }
+                            })
+                            .catch(console.error);
+                    }, {once: true});
+                } else {
+                    // Non-iOS 13+ devices
+                    window.addEventListener('deviceorientation', handleOrientation);
+                }
+            } else {
+                console.log('Device orientation not supported');
+            }
+        }
+        
+        // Handle device orientation changes
+        function handleOrientation(event) {
+            if (event.webkitCompassHeading) {
+                // iOS compass heading (in degrees)
+                currentHeading = event.webkitCompassHeading;
+            } else if (event.alpha) {
+                // Android/others (alpha is in degrees)
+                currentHeading = 360 - event.alpha;
+            }
+            
+            // Update the compass arrow
+            directionArrow.style.transform = `rotate(${currentHeading}deg)`;
+            
+            // Update heading display
+            document.getElementById('headingDisplay').textContent = `Heading: ${Math.round(currentHeading)}°`;
+            
+            // Rotate the map if tracking is active and user is moving
+            if (isRotating && watchId) {
+                map.setBearing(currentHeading);
             }
         }
         
@@ -312,6 +413,7 @@
         function toggleLiveTracking() {
             const trackingButton = document.getElementById('startTracking');
             const statusElement = document.getElementById('status');
+            const trackingInfoElement = document.getElementById('trackingInfo');
             
             if (watchId) {
                 // Stop tracking
@@ -321,6 +423,7 @@
                 
                 // Hide status when tracking is stopped
                 statusElement.style.display = 'none';
+                trackingInfoElement.style.display = 'none';
                 
                 // Reset user marker color
                 if (userMarker) {
@@ -328,6 +431,15 @@
                         fillColor: '#4285F4' // Default blue
                     });
                 }
+                
+                // Stop rotating the map
+                isRotating = false;
+                
+                // Reset map rotation
+                map.setBearing(0);
+                
+                // Reset previous positions array
+                previousPositions = [];
             } else {
                 // Start tracking
                 if (navigator.geolocation) {
@@ -341,20 +453,76 @@
                         {
                             enableHighAccuracy: true,
                             maximumAge: 0,
-                            timeout: 5000
+                            timeout: 1000 // Reduce timeout for more frequent updates
                         }
                     );
                     
                     trackingButton.textContent = 'Stop Live Tracking';
                     
+                    // Show tracking info
+                    trackingInfoElement.style.display = 'block';
+                    
                     // If we have a selected location, show status
                     if (selectedLocation) {
                         statusElement.style.display = 'block';
+                    }
+                    
+                    // Enable map rotation
+                    isRotating = true;
+                    
+                    // Add Leaflet.rotate plugin if it's not already added
+                    if (!map.setBearing) {
+                        // Simple rotation function for the map
+                        map.setBearing = function(bearing) {
+                            const mapContainer = this.getContainer();
+                            mapContainer.style.transform = `rotate(${bearing}deg)`;
+                            this._bearing = bearing;
+                        };
                     }
                 } else {
                     alert('Geolocation is not supported by your browser.');
                 }
             }
+        }
+        
+        // Calculate heading from two positions
+        function calculateHeading(position1, position2) {
+            const lat1 = position1.lat * Math.PI / 180;
+            const lat2 = position2.lat * Math.PI / 180;
+            const lon1 = position1.lng * Math.PI / 180;
+            const lon2 = position2.lng * Math.PI / 180;
+            
+            const y = Math.sin(lon2 - lon1) * Math.cos(lat2);
+            const x = Math.cos(lat1) * Math.sin(lat2) -
+                    Math.sin(lat1) * Math.cos(lat2) * Math.cos(lon2 - lon1);
+            
+            let heading = Math.atan2(y, x) * 180 / Math.PI;
+            if (heading < 0) {
+                heading += 360;
+            }
+            
+            return heading;
+        }
+        
+        // Calculate distance between two positions in meters
+        function calculateDistance(position1, position2) {
+            const lat1 = position1.lat;
+            const lon1 = position1.lng;
+            const lat2 = position2.lat;
+            const lon2 = position2.lng;
+            
+            const R = 6371e3; // Earth radius in meters
+            const φ1 = lat1 * Math.PI / 180;
+            const φ2 = lat2 * Math.PI / 180;
+            const Δφ = (lat2 - lat1) * Math.PI / 180;
+            const Δλ = (lon2 - lon1) * Math.PI / 180;
+            
+            const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
+                    Math.cos(φ1) * Math.cos(φ2) *
+                    Math.sin(Δλ/2) * Math.sin(Δλ/2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+            
+            return R * c;
         }
         
         // Update the user's position on the map
@@ -363,6 +531,14 @@
                 lat: position.coords.latitude,
                 lng: position.coords.longitude
             };
+            
+            // Store the current position
+            previousPositions.push(userLocation);
+            
+            // Keep only the last 5 positions
+            if (previousPositions.length > 5) {
+                previousPositions.shift();
+            }
             
             // If we already have a marker, update its position
             if (userMarker) {
@@ -379,6 +555,56 @@
                 }).addTo(map);
                 
                 userMarker.bindPopup('Your Current Location');
+            }
+            
+            // Center the map on the user's location if tracking is active
+            if (isRotating) {
+                map.panTo([userLocation.lat, userLocation.lng]);
+            }
+            
+            // Calculate speed if we have previous positions
+            if (lastPosition && position.coords.speed !== undefined) {
+                let speed = position.coords.speed;
+                // Convert m/s to km/h
+                speed = speed * 3.6;
+                document.getElementById('speedDisplay').textContent = `Speed: ${speed.toFixed(1)} km/h`;
+            } else if (lastPosition && previousPositions.length >= 2) {
+                // Calculate speed from positions if device doesn't provide it
+                const distance = calculateDistance(lastPosition, userLocation);
+                const timeDiff = (new Date() - lastPosition.timestamp) / 1000; // in seconds
+                const speed = (distance / timeDiff) * 3.6; // Convert m/s to km/h
+                
+                if (!isNaN(speed) && isFinite(speed)) {
+                    document.getElementById('speedDisplay').textContent = `Speed: ${speed.toFixed(1)} km/h`;
+                }
+            }
+            
+            // Only update heading if we've moved enough
+            if (lastPosition) {
+                const distance = calculateDistance(lastPosition, userLocation);
+                
+                if (distance > movementThreshold) {
+                    // Calculate heading based on movement
+                    const movementHeading = calculateHeading(lastPosition, userLocation);
+                    
+                    // Update compass if device orientation is not available
+                    if (!currentHeading) {
+                        currentHeading = movementHeading;
+                        directionArrow.style.transform = `rotate(${currentHeading}deg)`;
+                        document.getElementById('headingDisplay').textContent = `Heading: ${Math.round(currentHeading)}°`;
+                    }
+                    
+                    // If we're rotating the map, update the bearing
+                    if (isRotating) {
+                        map.setBearing(currentHeading);
+                    }
+                    
+                    // Update last position with timestamp
+                    lastPosition = {...userLocation, timestamp: new Date()};
+                }
+            } else {
+                // Initialize last position with timestamp
+                lastPosition = {...userLocation, timestamp: new Date()};
             }
             
             // Update the user's status
