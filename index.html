@@ -107,7 +107,7 @@
             color: white;
         }
         
-        .direction-indicator {
+        .compass {
             position: absolute;
             top: 70px;
             right: 10px;
@@ -122,15 +122,6 @@
             box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
         }
         
-        .compass-arrow {
-            width: 0;
-            height: 0;
-            border-left: 8px solid transparent;
-            border-right: 8px solid transparent;
-            border-bottom: 16px solid #e74c3c;
-            transform-origin: center bottom;
-        }
-        
         .tracking-info {
             padding: 0.5rem;
             background-color: rgba(255, 255, 255, 0.8);
@@ -138,6 +129,26 @@
             margin-top: 0.5rem;
             font-size: 0.9rem;
             text-align: center;
+        }
+        
+        /* Direction marker styles */
+        .direction-marker {
+            width: 0;
+            height: 0;
+            margin: 0 auto;
+        }
+        
+        .direction-arrow {
+            width: 0;
+            height: 0;
+            border-left: 6px solid transparent;
+            border-right: 6px solid transparent;
+            border-bottom: 12px solid #e74c3c;
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            transform-origin: center;
         }
     </style>
 </head>
@@ -149,8 +160,11 @@
     <div class="main-content">
         <div id="map">
             <div id="loading">Loading map...</div>
-            <div class="direction-indicator" id="directionIndicator">
-                <div class="compass-arrow" id="compassArrow"></div>
+            <div class="compass" id="compass">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"></polygon>
+                </svg>
             </div>
         </div>
         
@@ -176,6 +190,7 @@
         // Global variables
         let map;
         let userMarker;
+        let directionMarker;
         let selectedLocationMarker;
         let radiusCircle;
         let watchId;
@@ -183,10 +198,10 @@
         let mapLoaded = false;
         let lastPosition = null;
         let currentHeading = 0;
-        let isRotating = false;
-        let directionArrow;
         let previousPositions = [];
-        let movementThreshold = 5; // meters
+        let movementThreshold = 2; // meters - lower threshold for more sensitivity
+        let trackingActive = false;
+        let customIcon;
         
         // Initialize the map
         function initMap() {
@@ -217,10 +232,18 @@
             
             // Set up event listeners
             document.getElementById('selectLocation').addEventListener('click', selectCurrentLocation);
-            document.getElementById('startTracking').addEventListener('click', toggleLiveTracking);
+            document.getElementById('startTracking').addEventListener('click', startLiveTracking);
             
-            // Initialize direction indicator
-            directionArrow = document.getElementById('compassArrow');
+            // Create custom direction icon for user marker
+            customIcon = L.divIcon({
+                className: 'direction-marker',
+                html: '<div class="direction-arrow" id="directionArrow"></div>',
+                iconSize: [20, 20],
+                iconAnchor: [10, 10]
+            });
+            
+            // Initialize device orientation
+            initDeviceOrientation();
             
             // Force hide loading after 5 seconds, in case the load event doesn't fire
             setTimeout(function() {
@@ -264,10 +287,12 @@
                             fillOpacity: 1
                         }).addTo(map);
                         
-                        userMarker.bindPopup('Your Current Location').openPopup();
+                        // Add direction marker at the same position
+                        directionMarker = L.marker([initialLocation.lat, initialLocation.lng], {
+                            icon: customIcon
+                        }).addTo(map);
                         
-                        // Try to get device orientation
-                        initDeviceOrientation();
+                        userMarker.bindPopup('Your Current Location').openPopup();
                         
                         // Re-enable select location button
                         selectLocationBtn.disabled = false;
@@ -324,15 +349,17 @@
                 currentHeading = 360 - event.alpha;
             }
             
-            // Update the compass arrow
-            directionArrow.style.transform = `rotate(${currentHeading}deg)`;
-            
-            // Update heading display
-            document.getElementById('headingDisplay').textContent = `Heading: ${Math.round(currentHeading)}°`;
-            
-            // Rotate the map if tracking is active and user is moving
-            if (isRotating && watchId) {
-                map.setBearing(currentHeading);
+            // Update tracking info if active
+            if (trackingActive) {
+                document.getElementById('headingDisplay').textContent = `Heading: ${Math.round(currentHeading)}°`;
+                
+                // Update direction marker rotation
+                if (directionMarker) {
+                    const arrow = document.getElementById('directionArrow');
+                    if (arrow) {
+                        arrow.style.transform = `rotate(${currentHeading}deg)`;
+                    }
+                }
             }
         }
         
@@ -409,79 +436,44 @@
             }
         }
         
-        // Toggle live tracking
-        function toggleLiveTracking() {
-            const trackingButton = document.getElementById('startTracking');
-            const statusElement = document.getElementById('status');
+        // Start live tracking - no toggle functionality
+        function startLiveTracking() {
             const trackingInfoElement = document.getElementById('trackingInfo');
             
+            // Clear any existing watch
             if (watchId) {
-                // Stop tracking
                 navigator.geolocation.clearWatch(watchId);
                 watchId = null;
-                trackingButton.textContent = 'Start Live Tracking';
+            }
+            
+            // Start fresh tracking session
+            if (navigator.geolocation) {
+                // Set tracking as active
+                trackingActive = true;
                 
-                // Hide status when tracking is stopped
-                statusElement.style.display = 'none';
-                trackingInfoElement.style.display = 'none';
+                // Start position watching with higher frequency updates
+                watchId = navigator.geolocation.watchPosition(
+                    updateUserPosition,
+                    (error) => {
+                        console.error('Error tracking user location:', error);
+                        alert('Unable to track your location. Please check your device settings and try again.');
+                    },
+                    {
+                        enableHighAccuracy: true,
+                        maximumAge: 0,
+                        timeout: 1000 // Reduced timeout for more frequent updates
+                    }
+                );
                 
-                // Reset user marker color
-                if (userMarker) {
-                    userMarker.setStyle({
-                        fillColor: '#4285F4' // Default blue
-                    });
+                // Show tracking info
+                trackingInfoElement.style.display = 'block';
+                
+                // If we have a selected location, ensure status is visible
+                if (selectedLocation) {
+                    document.getElementById('status').style.display = 'block';
                 }
-                
-                // Stop rotating the map
-                isRotating = false;
-                
-                // Reset map rotation
-                map.setBearing(0);
-                
-                // Reset previous positions array
-                previousPositions = [];
             } else {
-                // Start tracking
-                if (navigator.geolocation) {
-                    watchId = navigator.geolocation.watchPosition(
-                        updateUserPosition,
-                        (error) => {
-                            console.error('Error tracking user location:', error);
-                            alert('Unable to track your location. Please check your device settings and try again.');
-                            trackingButton.textContent = 'Start Live Tracking';
-                        },
-                        {
-                            enableHighAccuracy: true,
-                            maximumAge: 0,
-                            timeout: 1000 // Reduce timeout for more frequent updates
-                        }
-                    );
-                    
-                    trackingButton.textContent = 'Stop Live Tracking';
-                    
-                    // Show tracking info
-                    trackingInfoElement.style.display = 'block';
-                    
-                    // If we have a selected location, show status
-                    if (selectedLocation) {
-                        statusElement.style.display = 'block';
-                    }
-                    
-                    // Enable map rotation
-                    isRotating = true;
-                    
-                    // Add Leaflet.rotate plugin if it's not already added
-                    if (!map.setBearing) {
-                        // Simple rotation function for the map
-                        map.setBearing = function(bearing) {
-                            const mapContainer = this.getContainer();
-                            mapContainer.style.transform = `rotate(${bearing}deg)`;
-                            this._bearing = bearing;
-                        };
-                    }
-                } else {
-                    alert('Geolocation is not supported by your browser.');
-                }
+                alert('Geolocation is not supported by your browser.');
             }
         }
         
@@ -532,7 +524,7 @@
                 lng: position.coords.longitude
             };
             
-            // Store the current position
+            // Store the current position for history
             previousPositions.push(userLocation);
             
             // Keep only the last 5 positions
@@ -540,7 +532,7 @@
                 previousPositions.shift();
             }
             
-            // If we already have a marker, update its position
+            // If we have a user marker, update its position
             if (userMarker) {
                 userMarker.setLatLng([userLocation.lat, userLocation.lng]);
             } else {
@@ -557,13 +549,21 @@
                 userMarker.bindPopup('Your Current Location');
             }
             
-            // Center the map on the user's location if tracking is active
-            if (isRotating) {
-                map.panTo([userLocation.lat, userLocation.lng]);
+            // Update direction marker position
+            if (directionMarker) {
+                directionMarker.setLatLng([userLocation.lat, userLocation.lng]);
+            } else {
+                // Create direction marker if it doesn't exist
+                directionMarker = L.marker([userLocation.lat, userLocation.lng], {
+                    icon: customIcon
+                }).addTo(map);
             }
             
+            // Center the map on the user's location during tracking
+            map.panTo([userLocation.lat, userLocation.lng]);
+            
             // Calculate speed if we have previous positions
-            if (lastPosition && position.coords.speed !== undefined) {
+            if (lastPosition && position.coords.speed !== undefined && position.coords.speed !== null) {
                 let speed = position.coords.speed;
                 // Convert m/s to km/h
                 speed = speed * 3.6;
@@ -574,7 +574,7 @@
                 const timeDiff = (new Date() - lastPosition.timestamp) / 1000; // in seconds
                 const speed = (distance / timeDiff) * 3.6; // Convert m/s to km/h
                 
-                if (!isNaN(speed) && isFinite(speed)) {
+                if (!isNaN(speed) && isFinite(speed) && speed < 150) { // Sanity check on speed
                     document.getElementById('speedDisplay').textContent = `Speed: ${speed.toFixed(1)} km/h`;
                 }
             }
@@ -584,20 +584,19 @@
                 const distance = calculateDistance(lastPosition, userLocation);
                 
                 if (distance > movementThreshold) {
-                    // Calculate heading based on movement
-                    const movementHeading = calculateHeading(lastPosition, userLocation);
-                    
-                    // Update compass if device orientation is not available
-                    if (!currentHeading) {
-                        currentHeading = movementHeading;
-                        directionArrow.style.transform = `rotate(${currentHeading}deg)`;
-                        document.getElementById('headingDisplay').textContent = `Heading: ${Math.round(currentHeading)}°`;
+                    // Calculate heading based on movement if no device orientation
+                    if (!currentHeading || currentHeading === 0) {
+                        currentHeading = calculateHeading(lastPosition, userLocation);
                     }
                     
-                    // If we're rotating the map, update the bearing
-                    if (isRotating) {
-                        map.setBearing(currentHeading);
+                    // Update direction arrow
+                    const arrow = document.getElementById('directionArrow');
+                    if (arrow) {
+                        arrow.style.transform = `rotate(${currentHeading}deg)`;
                     }
+                    
+                    // Update heading display
+                    document.getElementById('headingDisplay').textContent = `Heading: ${Math.round(currentHeading)}°`;
                     
                     // Update last position with timestamp
                     lastPosition = {...userLocation, timestamp: new Date()};
@@ -625,26 +624,23 @@
             
             const statusElement = document.getElementById('status');
             
-            // Only update status if tracking is active
-            if (watchId) {
-                // Check if the user is within the circle
-                if (distance <= 50) { // 50 meters
-                    statusElement.textContent = 'You are INSIDE the target area!';
-                    statusElement.className = 'inside';
-                    
-                    // Update user marker color to green
-                    userMarker.setStyle({
-                        fillColor: '#2ecc71' // Green
-                    });
-                } else {
-                    statusElement.textContent = 'ALERT: You are OUTSIDE the target area!';
-                    statusElement.className = 'outside';
-                    
-                    // Update user marker color to red
-                    userMarker.setStyle({
-                        fillColor: '#e74c3c' // Red
-                    });
-                }
+            // Check if the user is within the circle
+            if (distance <= 50) { // 50 meters
+                statusElement.textContent = 'You are INSIDE the target area!';
+                statusElement.className = 'inside';
+                
+                // Update user marker color to green
+                userMarker.setStyle({
+                    fillColor: '#2ecc71' // Green
+                });
+            } else {
+                statusElement.textContent = 'ALERT: You are OUTSIDE the target area!';
+                statusElement.className = 'outside';
+                
+                // Update user marker color to red
+                userMarker.setStyle({
+                    fillColor: '#e74c3c' // Red
+                });
             }
         }
         
