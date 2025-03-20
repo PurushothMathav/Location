@@ -29,13 +29,27 @@
             align-items: center;
         }
         
-        #map {
+        .map-container {
             width: 100%;
             height: 400px;
+            position: relative;
             margin-bottom: 1rem;
+        }
+        
+        #map {
+            width: 100%;
+            height: 100%;
             border-radius: 8px;
             box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-            position: relative;
+        }
+        
+        #streetView {
+            width: 100%;
+            height: 300px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            margin-bottom: 1rem;
+            display: none; /* Hidden by default */
         }
         
         #loading {
@@ -48,6 +62,19 @@
             border-radius: 8px;
             text-align: center;
             z-index: 1000;
+        }
+        
+        .view-toggle {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 10;
+            background-color: white;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            padding: 5px 10px;
+            cursor: pointer;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
         }
         
         .controls {
@@ -132,6 +159,28 @@
             font-weight: bold;
             display: none;
         }
+        
+        .street-view-controls {
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+            max-width: 500px;
+            margin-bottom: 1rem;
+        }
+        
+        .street-view-toggle {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 0.5rem 1rem;
+            cursor: pointer;
+            font-size: 0.9rem;
+        }
+        
+        .street-view-toggle.active {
+            background-color: #2ecc71;
+        }
     </style>
 </head>
 <body>
@@ -140,8 +189,18 @@
     </div>
     
     <div class="main-content">
-        <div id="map">
-            <div id="loading">Loading map...</div>
+        <div class="map-container">
+            <div id="map">
+                <div id="loading">Loading map...</div>
+            </div>
+            <button id="viewToggle" class="view-toggle">Map View</button>
+        </div>
+        
+        <div id="streetView"></div>
+        
+        <div class="street-view-controls">
+            <button id="enableStreetView" class="street-view-toggle">Enable Street View</button>
+            <button id="followOrientation" class="street-view-toggle">Follow Orientation</button>
         </div>
         
         <div class="controls">
@@ -163,6 +222,7 @@
     <script>
         // Global variables
         let map;
+        let panorama;
         let userMarker;
         let directionMarker;
         let selectedLocationMarker;
@@ -175,6 +235,9 @@
         let previousPositions = [];
         let movementThreshold = 2; // meters - lower threshold for more sensitivity
         let trackingActive = false;
+        let streetViewEnabled = false;
+        let followOrientation = false;
+        let streetViewService;
         
         // Initialize the map
         function initMap() {
@@ -193,6 +256,26 @@
                 fullscreenControl: true
             });
             
+            // Initialize Street View service
+            streetViewService = new google.maps.StreetViewService();
+            
+            // Create Street View panorama
+            panorama = new google.maps.StreetViewPanorama(document.getElementById('streetView'), {
+                pov: {
+                    heading: 0,
+                    pitch: 0
+                },
+                visible: false,
+                linksControl: false,
+                panControl: false,
+                enableCloseButton: false,
+                addressControl: false,
+                fullscreenControl: false
+            });
+            
+            // Connect the Street View panorama to the map
+            map.setStreetView(panorama);
+            
             // Hide loading indicator when map is loaded
             google.maps.event.addListenerOnce(map, 'tilesloaded', function() {
                 document.getElementById('loading').style.display = 'none';
@@ -205,6 +288,9 @@
             // Set up event listeners
             document.getElementById('selectLocation').addEventListener('click', selectCurrentLocation);
             document.getElementById('trackingButton').addEventListener('click', toggleTracking);
+            document.getElementById('enableStreetView').addEventListener('click', toggleStreetView);
+            document.getElementById('followOrientation').addEventListener('click', toggleOrientationFollow);
+            document.getElementById('viewToggle').addEventListener('click', toggleMapView);
             
             // Initialize device orientation
             initDeviceOrientation();
@@ -219,6 +305,98 @@
                     getUserInitialLocation();
                 }
             }, 5000);
+        }
+        
+        // Toggle between map view and satellite view
+        function toggleMapView() {
+            const button = document.getElementById('viewToggle');
+            if (map.getMapTypeId() === google.maps.MapTypeId.ROADMAP) {
+                map.setMapTypeId(google.maps.MapTypeId.SATELLITE);
+                button.textContent = 'Satellite View';
+            } else {
+                map.setMapTypeId(google.maps.MapTypeId.ROADMAP);
+                button.textContent = 'Map View';
+            }
+        }
+        
+        // Toggle Street View
+        function toggleStreetView() {
+            const button = document.getElementById('enableStreetView');
+            const streetViewElement = document.getElementById('streetView');
+            
+            if (streetViewEnabled) {
+                // Disable Street View
+                streetViewEnabled = false;
+                streetViewElement.style.display = 'none';
+                button.textContent = 'Enable Street View';
+                button.classList.remove('active');
+            } else {
+                // Enable Street View
+                streetViewEnabled = true;
+                updateStreetView();
+                streetViewElement.style.display = 'block';
+                button.textContent = 'Disable Street View';
+                button.classList.add('active');
+            }
+        }
+        
+        // Toggle orientation following
+        function toggleOrientationFollow() {
+            const button = document.getElementById('followOrientation');
+            
+            if (followOrientation) {
+                // Disable orientation following
+                followOrientation = false;
+                button.textContent = 'Follow Orientation';
+                button.classList.remove('active');
+            } else {
+                // Enable orientation following
+                followOrientation = true;
+                button.textContent = 'Stop Following';
+                button.classList.add('active');
+                
+                // If Street View is not enabled, enable it
+                if (!streetViewEnabled) {
+                    toggleStreetView();
+                }
+            }
+        }
+        
+        // Update Street View based on current location and heading
+        function updateStreetView() {
+            if (!streetViewEnabled || !lastPosition) return;
+            
+            const position = new google.maps.LatLng(lastPosition.lat, lastPosition.lng);
+            
+            streetViewService.getPanorama({
+                location: position,
+                radius: 50, // Look for street view within 50 meters
+                preference: google.maps.StreetViewPreference.NEAREST
+            }, function(data, status) {
+                if (status === google.maps.StreetViewStatus.OK) {
+                    panorama.setPosition(data.location.latLng);
+                    
+                    // Update heading if following orientation
+                    if (followOrientation) {
+                        panorama.setPov({
+                            heading: currentHeading,
+                            pitch: 0
+                        });
+                    }
+                    
+                    panorama.setVisible(true);
+                } else {
+                    console.log('Street View not available at this location');
+                    // Show error message for no street view
+                    showErrorMessage('Street View not available at this location. Try moving to a different area.');
+                    
+                    // Hide Street View panel
+                    document.getElementById('streetView').style.display = 'none';
+                    document.getElementById('enableStreetView').classList.remove('active');
+                    document.getElementById('enableStreetView').textContent = 'Enable Street View';
+                    streetViewEnabled = false;
+                }
+            });
         }
         
         // Get user's initial location
@@ -337,6 +515,11 @@
             const errorElement = document.getElementById('errorMessage');
             errorElement.textContent = message;
             errorElement.style.display = 'block';
+            
+            // Auto-hide error after 5 seconds
+            setTimeout(() => {
+                errorElement.style.display = 'none';
+            }, 5000);
         }
         
         // Initialize device orientation tracking
@@ -401,6 +584,14 @@
                         strokeColor: '#ffffff',
                         strokeWeight: 1,
                         rotation: currentHeading
+                    });
+                }
+                
+                // Update Street View heading if following orientation
+                if (streetViewEnabled && followOrientation) {
+                    panorama.setPov({
+                        heading: currentHeading,
+                        pitch: 0
                     });
                 }
             }
@@ -697,65 +888,65 @@
                     
                     // Update heading display
                     document.getElementById('headingDisplay').textContent = `Heading: ${Math.round(currentHeading)}°`;
-                    
-                    // Update last position with timestamp
-                    lastPosition = {...userLocation, timestamp: new Date()};
                 }
-            } else {
-                // Initialize last position with timestamp
-                lastPosition = {...userLocation, timestamp: new Date()};
             }
             
-            // Update the user's status
+            // Update Street View if enabled
+            if (streetViewEnabled) {
+                updateStreetView();
+            }
+            
+            // Update the user's status if we have a selected location
             if (selectedLocation) {
                 updateUserStatus();
             }
+            
+            // Update timestamp and position
+            lastPosition = {
+                ...userLocation,
+                timestamp: new Date()
+            };
         }
         
-        // Update the user's status (inside or outside the circle)
+        // Update the user's status relative to the selected location
         function updateUserStatus() {
-            if (!userMarker || !selectedLocation) return;
-            
-            const userLatLng = userMarker.getPosition();
-            const selectedLatLng = new google.maps.LatLng(selectedLocation.lat, selectedLocation.lng);
-            
-            // Calculate distance in meters
-            const distance = google.maps.geometry.spherical.computeDistanceBetween(userLatLng, selectedLatLng);
+            if (!selectedLocation || !userMarker) return;
             
             const statusElement = document.getElementById('status');
+            const userPosition = userMarker.getPosition();
+            const locationPosition = new google.maps.LatLng(selectedLocation.lat, selectedLocation.lng);
             
-            // Check if the user is within the circle
-            if (distance <= 50) { // 50 meters
-                statusElement.textContent = 'You are INSIDE the target area!';
+            // Calculate distance between user and selected location in meters
+            const distance = google.maps.geometry.spherical.computeDistanceBetween(
+                userPosition,
+                locationPosition
+            );
+            
+            // Determine if the user is inside or outside the radius
+            if (distance <= 50) {
+                // User is inside the radius
+                statusElement.textContent = `You are INSIDE the area (${Math.round(distance)} meters from center)`;
                 statusElement.className = 'inside';
-                
-                // Update user marker color to green
-                userMarker.setIcon({
-                    path: google.maps.SymbolPath.CIRCLE,
-                    scale: 8,
-                    fillColor: '#2ecc71', // Green
-                    fillOpacity: 1,
-                    strokeColor: '#ffffff',
-                    strokeWeight: 2
-                });
             } else {
-                statusElement.textContent = 'ALERT: You are OUTSIDE the target area!';
+                // User is outside the radius
+                statusElement.textContent = `You are OUTSIDE the area (${Math.round(distance)} meters from center)`;
                 statusElement.className = 'outside';
-                
-                // Update user marker color to red
-                userMarker.setIcon({
-                    path: google.maps.SymbolPath.CIRCLE,
-                    scale: 8,
-                    fillColor: '#e74c3c', // Red
-                    fillOpacity: 1,
-                    strokeColor: '#ffffff',
-                    strokeWeight: 2
-                });
             }
         }
+        
+        // Load Google Maps API with required libraries
+        function loadGoogleMapsScript() {
+            const script = document.createElement('script');
+            script.src = `https://maps.googleapis.com/maps/api/js?key=YOUR_API_KEY&libraries=geometry&callback=initMap`;
+            script.defer = true;
+            script.async = true;
+            document.head.appendChild(script);
+        }
+        
+        // Load the Google Maps API when the page loads
+        window.onload = function() {
+            loadGoogleMapsScript();
+        };
     </script>
-    
-    <!-- Load Google Maps JavaScript API -->
-    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyDvIphALKCkCqfOF79jmws-_x8c7332Ae0&libraries=geometry&callback=initMap" async defer></script>
 </body>
 </html>
