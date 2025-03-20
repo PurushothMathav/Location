@@ -4,8 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MOS Location Tracker</title>
-    <!-- Leaflet CSS -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -115,21 +113,6 @@
             color: white;
         }
         
-        .compass {
-            position: absolute;
-            top: 70px;
-            right: 10px;
-            width: 40px;
-            height: 40px;
-            background-color: rgba(255, 255, 255, 0.8);
-            border-radius: 50%;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            z-index: 1000;
-            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
-        }
-        
         .tracking-info {
             padding: 0.5rem;
             background-color: rgba(255, 255, 255, 0.8);
@@ -137,26 +120,6 @@
             margin-top: 0.5rem;
             font-size: 0.9rem;
             text-align: center;
-        }
-        
-        /* Direction marker styles */
-        .direction-marker {
-            width: 0;
-            height: 0;
-            margin: 0 auto;
-        }
-        
-        .direction-arrow {
-            width: 0;
-            height: 0;
-            border-left: 6px solid transparent;
-            border-right: 6px solid transparent;
-            border-bottom: 12px solid #e74c3c;
-            position: absolute;
-            left: 50%;
-            top: 50%;
-            transform: translate(-50%, -50%);
-            transform-origin: center;
         }
         
         #errorMessage {
@@ -179,12 +142,6 @@
     <div class="main-content">
         <div id="map">
             <div id="loading">Loading map...</div>
-            <div class="compass" id="compass">
-                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="12" cy="12" r="10"></circle>
-                    <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"></polygon>
-                </svg>
-            </div>
         </div>
         
         <div class="controls">
@@ -203,9 +160,6 @@
         <p>MOS Location Tracker &copy; 2025</p>
     </div>
     
-    <!-- Leaflet JS -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
-    
     <script>
         // Global variables
         let map;
@@ -221,7 +175,6 @@
         let previousPositions = [];
         let movementThreshold = 2; // meters - lower threshold for more sensitivity
         let trackingActive = false;
-        let customIcon;
         
         // Initialize the map
         function initMap() {
@@ -229,38 +182,29 @@
             document.getElementById('loading').style.display = 'block';
             
             // Create a map with default view
-            map = L.map('map', {
+            map = new google.maps.Map(document.getElementById('map'), {
+                center: { lat: 0, lng: 0 },
+                zoom: 2,
+                mapTypeId: google.maps.MapTypeId.ROADMAP,
+                disableDefaultUI: false,
                 zoomControl: true,
-                attributionControl: true
-            }).setView([0, 0], 2);
+                streetViewControl: false,
+                mapTypeControl: true,
+                fullscreenControl: true
+            });
             
-            // Add OpenStreetMap tile layer
-            const tileLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-            }).addTo(map);
-            
-            // Hide loading indicator when map and tiles are loaded
-            tileLayer.on('load', function() {
-                if (!mapLoaded) {
-                    document.getElementById('loading').style.display = 'none';
-                    mapLoaded = true;
-                    
-                    // Get user's initial location after map is loaded
-                    getUserInitialLocation();
-                }
+            // Hide loading indicator when map is loaded
+            google.maps.event.addListenerOnce(map, 'tilesloaded', function() {
+                document.getElementById('loading').style.display = 'none';
+                mapLoaded = true;
+                
+                // Get user's initial location after map is loaded
+                getUserInitialLocation();
             });
             
             // Set up event listeners
             document.getElementById('selectLocation').addEventListener('click', selectCurrentLocation);
             document.getElementById('trackingButton').addEventListener('click', toggleTracking);
-            
-            // Create custom direction icon for user marker
-            customIcon = L.divIcon({
-                className: 'direction-marker',
-                html: '<div class="direction-arrow" id="directionArrow"></div>',
-                iconSize: [20, 20],
-                iconAnchor: [10, 10]
-            });
             
             // Initialize device orientation
             initDeviceOrientation();
@@ -295,24 +239,45 @@
                         lastPosition = initialLocation;
                         
                         // Center the map on the user's location
-                        map.setView([initialLocation.lat, initialLocation.lng], 15);
+                        map.setCenter(initialLocation);
+                        map.setZoom(15);
                         
                         // Create a marker for the user's current position
-                        userMarker = L.circleMarker([initialLocation.lat, initialLocation.lng], {
-                            radius: 8,
-                            fillColor: '#4285F4',
-                            color: '#ffffff',
-                            weight: 2,
-                            opacity: 1,
-                            fillOpacity: 1
-                        }).addTo(map);
+                        userMarker = new google.maps.Marker({
+                            position: initialLocation,
+                            map: map,
+                            icon: {
+                                path: google.maps.SymbolPath.CIRCLE,
+                                scale: 8,
+                                fillColor: '#4285F4',
+                                fillOpacity: 1,
+                                strokeColor: '#ffffff',
+                                strokeWeight: 2
+                            },
+                            title: 'Your Current Location'
+                        });
                         
-                        // Add direction marker at the same position
-                        directionMarker = L.marker([initialLocation.lat, initialLocation.lng], {
-                            icon: customIcon
-                        }).addTo(map);
+                        // Create a direction marker
+                        directionMarker = new google.maps.Marker({
+                            position: initialLocation,
+                            map: map,
+                            icon: {
+                                path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
+                                scale: 4,
+                                fillColor: '#e74c3c',
+                                fillOpacity: 1,
+                                strokeColor: '#ffffff',
+                                strokeWeight: 1,
+                                rotation: currentHeading
+                            },
+                            zIndex: 2
+                        });
                         
-                        userMarker.bindPopup('Your Current Location').openPopup();
+                        // Create an info window for the user's position
+                        const infoWindow = new google.maps.InfoWindow({
+                            content: 'Your Current Location'
+                        });
+                        infoWindow.open(map, userMarker);
                         
                         // Re-enable select location button
                         selectLocationBtn.disabled = false;
@@ -428,10 +393,15 @@
                 
                 // Update direction marker rotation
                 if (directionMarker) {
-                    const arrow = document.getElementById('directionArrow');
-                    if (arrow) {
-                        arrow.style.transform = `translate(-50%, -50%) rotate(${currentHeading}deg)`;
-                    }
+                    directionMarker.setIcon({
+                        path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
+                        scale: 4,
+                        fillColor: '#e74c3c',
+                        fillOpacity: 1,
+                        strokeColor: '#ffffff',
+                        strokeWeight: 1,
+                        rotation: currentHeading
+                    });
                 }
             }
         }
@@ -452,32 +422,42 @@
                         
                         // If we already have a marker, remove it
                         if (selectedLocationMarker) {
-                            map.removeLayer(selectedLocationMarker);
+                            selectedLocationMarker.setMap(null);
                         }
                         
                         // Create a marker for the selected location
-                        selectedLocationMarker = L.marker([selectedLocation.lat, selectedLocation.lng], {
+                        selectedLocationMarker = new google.maps.Marker({
+                            position: selectedLocation,
+                            map: map,
                             title: 'Selected Location'
-                        }).addTo(map);
+                        });
                         
-                        selectedLocationMarker.bindPopup('Selected Location').openPopup();
+                        // Create an info window for the selected location
+                        const infoWindow = new google.maps.InfoWindow({
+                            content: 'Selected Location'
+                        });
+                        infoWindow.open(map, selectedLocationMarker);
                         
                         // If we already have a circle, remove it
                         if (radiusCircle) {
-                            map.removeLayer(radiusCircle);
+                            radiusCircle.setMap(null);
                         }
                         
                         // Create a circle with a 50-meter radius
-                        radiusCircle = L.circle([selectedLocation.lat, selectedLocation.lng], {
-                            radius: 50, // 50 meters
-                            color: '#3498db',
+                        radiusCircle = new google.maps.Circle({
+                            strokeColor: '#3498db',
+                            strokeOpacity: 0.8,
+                            strokeWeight: 2,
                             fillColor: '#3498db',
                             fillOpacity: 0.3,
-                            weight: 2
-                        }).addTo(map);
+                            map: map,
+                            center: selectedLocation,
+                            radius: 50 // 50 meters
+                        });
                         
                         // Center the map on the selected location
-                        map.setView([selectedLocation.lat, selectedLocation.lng], 18); // Zoom in closer
+                        map.setCenter(selectedLocation);
+                        map.setZoom(18); // Zoom in closer
                         
                         // Update the user's status
                         if (userMarker) {
@@ -630,33 +610,47 @@
             
             // If we have a user marker, update its position
             if (userMarker) {
-                userMarker.setLatLng([userLocation.lat, userLocation.lng]);
+                userMarker.setPosition(userLocation);
             } else {
                 // Create a marker for the user's current position
-                userMarker = L.circleMarker([userLocation.lat, userLocation.lng], {
-                    radius: 8,
-                    fillColor: '#4285F4',
-                    color: '#ffffff',
-                    weight: 2,
-                    opacity: 1,
-                    fillOpacity: 1
-                }).addTo(map);
-                
-                userMarker.bindPopup('Your Current Location');
+                userMarker = new google.maps.Marker({
+                    position: userLocation,
+                    map: map,
+                    icon: {
+                        path: google.maps.SymbolPath.CIRCLE,
+                        scale: 8,
+                        fillColor: '#4285F4',
+                        fillOpacity: 1,
+                        strokeColor: '#ffffff',
+                        strokeWeight: 2
+                    },
+                    title: 'Your Current Location'
+                });
             }
             
             // Update direction marker position
             if (directionMarker) {
-                directionMarker.setLatLng([userLocation.lat, userLocation.lng]);
+                directionMarker.setPosition(userLocation);
             } else {
                 // Create direction marker if it doesn't exist
-                directionMarker = L.marker([userLocation.lat, userLocation.lng], {
-                    icon: customIcon
-                }).addTo(map);
+                directionMarker = new google.maps.Marker({
+                    position: userLocation,
+                    map: map,
+                    icon: {
+                        path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
+                        scale: 4,
+                        fillColor: '#e74c3c',
+                        fillOpacity: 1,
+                        strokeColor: '#ffffff',
+                        strokeWeight: 1,
+                        rotation: currentHeading
+                    },
+                    zIndex: 2
+                });
             }
             
             // Center the map on the user's location during tracking
-            map.panTo([userLocation.lat, userLocation.lng]);
+            map.panTo(userLocation);
             
             // Calculate speed if we have previous positions
             if (lastPosition && position.coords.speed !== undefined && position.coords.speed !== null) {
@@ -690,11 +684,16 @@
                         currentHeading = calculatedHeading;
                     }
                     
-                    // Update direction arrow
-                    const arrow = document.getElementById('directionArrow');
-                    if (arrow) {
-                        arrow.style.transform = `translate(-50%, -50%) rotate(${currentHeading}deg)`;
-                    }
+                    // Update direction marker rotation
+                    directionMarker.setIcon({
+                        path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
+                        scale: 4,
+                        fillColor: '#e74c3c',
+                        fillOpacity: 1,
+                        strokeColor: '#ffffff',
+                        strokeWeight: 1,
+                        rotation: currentHeading
+                    });
                     
                     // Update heading display
                     document.getElementById('headingDisplay').textContent = `Heading: ${Math.round(currentHeading)}°`;
@@ -717,11 +716,11 @@
         function updateUserStatus() {
             if (!userMarker || !selectedLocation) return;
             
-            const userLatLng = userMarker.getLatLng();
-            const selectedLatLng = L.latLng(selectedLocation.lat, selectedLocation.lng);
+            const userLatLng = userMarker.getPosition();
+            const selectedLatLng = new google.maps.LatLng(selectedLocation.lat, selectedLocation.lng);
             
             // Calculate distance in meters
-            const distance = userLatLng.distanceTo(selectedLatLng);
+            const distance = google.maps.geometry.spherical.computeDistanceBetween(userLatLng, selectedLatLng);
             
             const statusElement = document.getElementById('status');
             
@@ -731,22 +730,32 @@
                 statusElement.className = 'inside';
                 
                 // Update user marker color to green
-                userMarker.setStyle({
-                    fillColor: '#2ecc71' // Green
+                userMarker.setIcon({
+                    path: google.maps.SymbolPath.CIRCLE,
+                    scale: 8,
+                    fillColor: '#2ecc71', // Green
+                    fillOpacity: 1,
+                    strokeColor: '#ffffff',
+                    strokeWeight: 2
                 });
             } else {
                 statusElement.textContent = 'ALERT: You are OUTSIDE the target area!';
                 statusElement.className = 'outside';
                 
                 // Update user marker color to red
-                userMarker.setStyle({
-                    fillColor: '#e74c3c' // Red
+                userMarker.setIcon({
+                    path: google.maps.SymbolPath.CIRCLE,
+                    scale: 8,
+                    fillColor: '#e74c3c', // Red
+                    fillOpacity: 1,
+                    strokeColor: '#ffffff',
+                    strokeWeight: 2
                 });
             }
         }
-        
-        // Initialize the map when the page loads
-        window.onload = initMap;
     </script>
+    
+    <!-- Load Google Maps JavaScript API -->
+    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyDvIphALKCkCqfOF79jmws-_x8c7332Ae0&libraries=geometry&callback=initMap" async defer></script>
 </body>
 </html>
